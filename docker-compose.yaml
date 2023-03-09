@@ -13,20 +13,6 @@ services:
       - "python"
       - "/src/main.py"
 
-  lint:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    profiles:
-      - tests
-    volumes:
-      - ./src:/src
-      - ./tests:/tests
-    command:
-      - "bash"
-      - "-c"
-      - "flake8 --config /tests/setup.cfg /src "
-
 
 
 
