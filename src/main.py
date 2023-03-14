@@ -46,26 +46,6 @@ class CheckResult:
         return message
 
 
-def poller_retry(func):
-    def wrapper(*args, **kwargs):
-        retry_counter = 1
-        while True:
-            log.debug('starting attempt %d', retry_counter)
-            try:
-                return func(*args, **kwargs)
-            except requests.exceptions.ConnectionError as err:
-                log.warning('%s', str(err))
-                log.debug('retrying after DVMN.ORG connection problems')
-            except telegram.error.TelegramError as tel_err:
-                log.warning('%s', str(tel_err))
-                log.debug('retrying after telegram connection problems')
-
-            time.sleep(SECONDS_TO_SLEEP)
-            retry_counter += 1
-
-    return wrapper
-
-
 class ApiPoller:
     def __init__(
             self,
@@ -98,17 +78,10 @@ class ApiPoller:
                 'Authorization': 'Token {0}'.format(self._token),
             })
             http.mount('https://', adapter)
-            http.hooks = {
-                'response': [
-                    lambda response, *args, **kwargs:
-                    response.raise_for_status(),
-                ],
-            }
             self._session = http
         return self._session
 
-    @poller_retry
-    def _long_polling(self) -> dict:
+    def _poll(self) -> [Tuple[CheckResult]]:
         polling_params = {
             'timestamp': self._start_ts,
         }
@@ -118,26 +91,44 @@ class ApiPoller:
             DVMN_LONG_POLLING,
             self._poll_timeout,
         )
-        polling_result = self.session.get(
-            url=DVMN_LONG_POLLING,
-            params=polling_params,
-            timeout=self._poll_timeout,
-        )
+        try:
+            polling_result = self.session.get(
+                url=DVMN_LONG_POLLING,
+                params=polling_params,
+                timeout=self._poll_timeout,
+            )
+        except requests.exceptions.ConnectionError as err:
+            log.warning('%s', str(err))
+            log.debug('retrying after DVMN.ORG connection problems')
+            time.sleep(DEFAULT_TIMEOUT)
+            return None
         log.debug('api poll status code: %s', polling_result.status_code)
         log.debug('api poll headers: %s', polling_result.headers)
         log.debug('api poll text resp: %s', polling_result.text)
-        return polling_result.json()
 
-    def _poll(self) -> Tuple[CheckResult]:
-        while True:
-            response = self._long_polling()
-            if response.get('status') != 'found':
-                self._start_ts = response.get('timestamp_to_request')
-                continue
-            self._start_ts = response.get('last_attempt_timestamp')
-            return tuple((
-                CheckResult(**attempt) for attempt in response['new_attempts']
-            ))
+        if not polling_result.ok:
+            return None
+        response = polling_result.json()
+
+        if response.get('status') != 'found':
+            self._start_ts = response.get(
+                'timestamp_to_request',
+                self._start_ts,
+            )
+            return None
+
+        last_attempt_timestamp = response.get('last_attempt_timestamp')
+        if last_attempt_timestamp is None:
+            log.debug(
+                'There is no anticipated field in response: %s',
+                response,
+            )
+            return None
+
+        self._start_ts = last_attempt_timestamp
+        return tuple((
+            CheckResult(**attempt) for attempt in response['new_attempts']
+        ))
 
 
 class TelegramNotificator:
@@ -153,28 +144,17 @@ class TelegramNotificator:
             disable_web_page_preview=True,
         )
 
-    def __call__(self, check_results: Tuple[CheckResult, ...]):
-        self._call(check_results=check_results)
+    def __call__(self, message: str):
+        return self._call(message=message)
 
-    @poller_retry
-    def _call(self, check_results: Tuple[CheckResult, ...]):
-        for num, check in enumerate(check_results, 1):
-            logging.debug('check result %d: %s', num, check)
-            self._send_message(text=check.as_message())
-
-
-class DvmnResultsChecker:
-
-    def __init__(
-            self,
-            api_poller,
-            notificator,
-    ):
-        self._api_poller = api_poller
-        self._notificator = notificator
-
-    def run(self):
-        self._notificator(self._api_poller())
+    def _call(self, message: str):
+        while True:
+            try:
+                return self._send_message(text=message)
+            except telegram.error.TelegramError as tel_err:
+                log.warning('%s', str(tel_err))
+                log.debug('retrying after telegram connection problems')
+                time.sleep(DEFAULT_TIMEOUT)
 
 
 def parse_args():
@@ -221,23 +201,21 @@ def main():
         logging.basicConfig(level=logging.DEBUG)
     log.debug(options)
 
-    checker = DvmnResultsChecker(
-        api_poller=ApiPoller(
-            token=options.token,
-            start_ts=ts(options.start_ts),
-            poll_timeout=timeout_seconds(options.poll_timeout),
-        ),
-        notificator=TelegramNotificator(
-            chat_id=options.chat_id,
-            token=options.tlgrm_creds,
-        ),
+    api_poller = ApiPoller(
+        token=options.token,
+        start_ts=ts(options.start_ts),
+        poll_timeout=timeout_seconds(options.poll_timeout),
+    )
+    send_message = TelegramNotificator(
+        chat_id=options.chat_id,
+        token=options.tlgrm_creds,
     )
     while True:
-        try:
-            checker.run()
-        except KeyboardInterrupt:
-            log.info('Interrupted by user')
-            return
+        res = api_poller()
+        if res is None:
+            continue
+        for check in res:
+            send_message(message=check.as_message())
 
 
 if __name__ == '__main__':
