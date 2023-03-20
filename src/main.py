@@ -180,10 +180,7 @@ def main():
         poll_timeout=timeout_seconds(options.poll_timeout),
     )
     while True:
-        check_results = api_poller.poll()
-        if check_results is None:
-            continue
-        for check in check_results:
+        for check in api_poller.poll() or ():
             send_message(
                 message=check.as_message(),
                 chat_id=options.chat_id,
