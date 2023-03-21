@@ -1,14 +1,11 @@
 import logging
 import time
 from dataclasses import dataclass
-from typing import NewType, Tuple
 
 import configargparse
 import requests
 import telegram
 
-ts = NewType('ts', str)
-timeout_seconds = NewType('timeout', int)
 log = logging.getLogger(__name__)
 
 DVMN_LONG_POLLING = 'https://dvmn.org/api/long_polling/'
@@ -43,80 +40,11 @@ class CheckResult:
         return message
 
 
-class ApiPoller:
-    def __init__(
-            self,
-            token,
-            start_ts: ts = None,
-            poll_timeout: timeout_seconds = None,
-    ):
-        self._start_ts = start_ts
-        self._token = token
-        self._poll_timeout = poll_timeout or timeout_seconds(DEFAULT_TIMEOUT)
-        self._session = None
-
-    def poll(self) -> [Tuple[CheckResult]]:
-        polling_params = {
-            'timestamp': self._start_ts,
-        }
-        log.debug(
-            'making request with params: %s, to: %s with timout: %s',
-            polling_params,
-            DVMN_LONG_POLLING,
-            self._poll_timeout,
-        )
-        try:
-            polling_result = requests.get(
-                url=DVMN_LONG_POLLING,
-                params=polling_params,
-                timeout=self._poll_timeout,
-                headers={
-                    'Authorization': 'Token {0}'.format(self._token),
-                },
-            )
-        except (
-                requests.exceptions.ConnectionError,
-                requests.exceptions.ReadTimeout,
-        ) as err:
-            log.warning('%s', str(err))
-            log.debug('retrying after DVMN.ORG connection problems')
-            time.sleep(SECONDS_TO_SLEEP)
-            return None
-        log.debug('api poll status code: %s', polling_result.status_code)
-        log.debug('api poll headers: %s', polling_result.headers)
-        log.debug('api poll text resp: %s', polling_result.text)
-
-        if not polling_result.ok:
-            return None
-        response = polling_result.json()
-
-        if response.get('status') != 'found':
-            self._start_ts = response.get(
-                'timestamp_to_request',
-                self._start_ts,
-            )
-            return None
-
-        last_attempt_timestamp = response.get('last_attempt_timestamp')
-        if last_attempt_timestamp is None:
-            log.debug(
-                'There is no anticipated field in response: %s',
-                response,
-            )
-            return None
-
-        self._start_ts = last_attempt_timestamp
-        return tuple((
-            CheckResult(**attempt) for attempt in response['new_attempts']
-        ))
-
-
 def send_message(
         message: str,
-        token: str,
+        bot: telegram.Bot,
         chat_id: str,
 ):
-    bot = telegram.Bot(token=token)
     while True:
         try:
             return bot.send_message(
@@ -173,18 +101,46 @@ def main():
     options = parse_args()
     if options.debug:
         logging.basicConfig(level=logging.DEBUG)
-    log.debug(options)
-    api_poller = ApiPoller(
-        token=options.token,
-        start_ts=ts(options.start_ts),
-        poll_timeout=timeout_seconds(options.poll_timeout),
-    )
+    start_ts = options.start_ts
+    bot = telegram.Bot(token=options.tlgrm_creds)
     while True:
-        for check in api_poller.poll() or ():
+        try:
+            polling_result = requests.get(
+                url=DVMN_LONG_POLLING,
+                params={
+                    'timestamp': start_ts,
+                },
+                timeout=options.poll_timeout,
+                headers={
+                    'Authorization': 'Token {0}'.format(options.token),
+                },
+            )
+        except (
+                requests.exceptions.ConnectionError,
+                requests.exceptions.ReadTimeout,
+        ) as err:
+            log.warning('%s', str(err))
+            log.debug('retrying after DVMN.ORG connection problems')
+            time.sleep(SECONDS_TO_SLEEP)
+            continue
+        log.debug('api poll status code: %s', polling_result.status_code)
+        log.debug('api poll headers: %s', polling_result.headers)
+        log.debug('api poll text resp: %s', polling_result.text)
+
+        if not polling_result.ok:
+            continue
+
+        response = polling_result.json()
+        start_ts = response.get('timestamp_to_request', start_ts)
+        if response.get('status') != 'found':
+            continue
+
+        start_ts = response.get('last_attempt_timestamp', start_ts)
+        for attempt in response['new_attempts']:
             send_message(
-                message=check.as_message(),
+                message=CheckResult(**attempt).as_message(),
                 chat_id=options.chat_id,
-                token=options.token,
+                bot=bot,
             )
 
 
