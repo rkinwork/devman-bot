@@ -7,5 +7,6 @@ start:
 stop:
 	docker-compose kill -s SIGINT
 
-
+run_server:
+	export $(cat .env | xargs) && python src/main.py
 
