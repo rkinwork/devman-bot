@@ -55,6 +55,22 @@ make stop
 | --start-ts                  | from which time start checking results  |
 | --poll-timeout              | change requests timeout to DVMN.ORG API |
 
+## Manipulations on server
+
+Name of the service `devman-bot`
+
+You can easily run these commands
+```bash
+systemctl start devman-bot
+systemctl stop devman-bot
+systemctl restart devman-bot
+```
+
+Don't forget after change configuration
+```bash
+systemctl daemon-reload
+```
+
 ## Authors
 
 * **DVMN.ORG TEAM** - *Idea*
