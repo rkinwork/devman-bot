@@ -6,7 +6,11 @@ import configargparse
 import requests
 import telegram
 
+from telegram_handler import TelegramHandler
+
 log = logging.getLogger(__name__)
+telegram_log = logging.getLogger('telegram')
+telegram_log.setLevel(logging.INFO)
 
 DVMN_LONG_POLLING = 'https://dvmn.org/api/long_polling/'
 DEFAULT_TIMEOUT = 180
@@ -54,7 +58,7 @@ def send_message(
                 disable_web_page_preview=True,
             )
         except telegram.error.TelegramError as tel_err:
-            log.warning('%s', str(tel_err))
+            log.error(msg=tel_err)
             log.debug('retrying after telegram connection problems')
             time.sleep(SECONDS_TO_SLEEP)
 
@@ -99,10 +103,25 @@ def parse_args():
 
 def main():
     options = parse_args()
+
+    # fot study purposes admin and user are the same persons
+    th = TelegramHandler(
+        token=options.tlgrm_creds,
+        admin_chat_id=options.chat_id,
+    )
+    log.addHandler(th)
+    th.setLevel(level=logging.INFO)
+    logging.basicConfig(handlers=(
+        logging.StreamHandler(),
+        th,
+    ),
+    )
     if options.debug:
         logging.basicConfig(level=logging.DEBUG)
+
     start_ts = options.start_ts
     bot = telegram.Bot(token=options.tlgrm_creds)
+    telegram_log.info(msg='Bot started')
     while True:
         try:
             polling_result = requests.get(
@@ -119,7 +138,7 @@ def main():
                 requests.exceptions.ConnectionError,
                 requests.exceptions.ReadTimeout,
         ) as err:
-            log.warning('%s', str(err))
+            log.error(msg=err)
             log.debug('retrying after DVMN.ORG connection problems')
             time.sleep(SECONDS_TO_SLEEP)
             continue
