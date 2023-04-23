@@ -9,8 +9,6 @@ import telegram
 from telegram_handler import TelegramHandler
 
 log = logging.getLogger(__name__)
-telegram_log = logging.getLogger('telegram')
-telegram_log.setLevel(logging.INFO)
 
 DVMN_LONG_POLLING = 'https://dvmn.org/api/long_polling/'
 DEFAULT_TIMEOUT = 180
@@ -61,6 +59,9 @@ def send_message(
             log.error(msg=tel_err)
             log.debug('retrying after telegram connection problems')
             time.sleep(SECONDS_TO_SLEEP)
+        except Exception as err:
+            log.error(msg=err)
+            raise
 
 
 def parse_args():
@@ -103,25 +104,26 @@ def parse_args():
 
 def main():
     options = parse_args()
-
     # fot study purposes admin and user are the same persons
+
+    # prepare basic logger
     th = TelegramHandler(
         token=options.tlgrm_creds,
         admin_chat_id=options.chat_id,
     )
-    log.addHandler(th)
     th.setLevel(level=logging.INFO)
-    logging.basicConfig(handlers=(
-        logging.StreamHandler(),
-        th,
-    ),
-    )
+
+    # prepare specific loggers
+    log.setLevel(logging.INFO)
+    log.addHandler(hdlr=th)
+
     if options.debug:
+        log.setLevel(logging.DEBUG)
         logging.basicConfig(level=logging.DEBUG)
 
     start_ts = options.start_ts
     bot = telegram.Bot(token=options.tlgrm_creds)
-    telegram_log.info(msg='Bot started')
+    log.info(msg='Bot started')
     while True:
         try:
             polling_result = requests.get(
@@ -140,8 +142,13 @@ def main():
         ) as err:
             log.error(msg=err)
             log.debug('retrying after DVMN.ORG connection problems')
-            time.sleep(SECONDS_TO_SLEEP)
             continue
+        except Exception as err:
+            # should I catch here system exceptions?
+            log.error(msg=err)
+            time.sleep(SECONDS_TO_SLEEP)
+            raise
+
         log.debug('api poll status code: %s', polling_result.status_code)
         log.debug('api poll headers: %s', polling_result.headers)
         log.debug('api poll text resp: %s', polling_result.text)
@@ -149,7 +156,12 @@ def main():
         if not polling_result.ok:
             continue
 
-        response = polling_result.json()
+        try:
+            response = polling_result.json()
+        except requests.JSONDecodeError as json_err:
+            log.error(msg=json_err)
+            continue
+
         start_ts = response.get('timestamp_to_request', start_ts)
         if response.get('status') != 'found':
             continue
