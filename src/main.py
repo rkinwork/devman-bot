@@ -127,7 +127,7 @@ def main():
     log.info(msg='Bot started')
     while True:
         try:
-            polling_result = requests.get(
+            response = requests.get(
                 url=DVMN_LONG_POLLING,
                 params={
                     'timestamp': start_ts,
@@ -151,25 +151,25 @@ def main():
             time.sleep(SECONDS_TO_SLEEP)
             raise
 
-        log.debug('api poll status code: %s', polling_result.status_code)
-        log.debug('api poll headers: %s', polling_result.headers)
-        log.debug('api poll text resp: %s', polling_result.text)
+        log.debug('api poll status code: %s', response.status_code)
+        log.debug('api poll headers: %s', response.headers)
+        log.debug('api poll text resp: %s', response.text)
 
-        if not polling_result.ok:
+        if not response.ok:
             continue
 
         try:
-            response = polling_result.json()
+            lessons_checks = response.json()
         except requests.JSONDecodeError as json_err:
             log.error(msg=json_err)
             continue
 
-        start_ts = response.get('timestamp_to_request', start_ts)
-        if response.get('status') != 'found':
+        start_ts = lessons_checks.get('timestamp_to_request', start_ts)
+        if lessons_checks.get('status') != 'found':
             continue
 
-        start_ts = response.get('last_attempt_timestamp', start_ts)
-        for attempt in response['new_attempts']:
+        start_ts = lessons_checks.get('last_attempt_timestamp', start_ts)
+        for attempt in lessons_checks['new_attempts']:
             send_message(
                 message=CheckResult(**attempt).as_message(),
                 chat_id=options.chat_id,
