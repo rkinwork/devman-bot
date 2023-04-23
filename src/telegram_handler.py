@@ -1,9 +1,7 @@
-import logging
+from contextlib import suppress
 from logging import StreamHandler, LogRecord
 
 import telegram
-
-log = logging.getLogger('telegram_handler')
 
 
 class TelegramHandler(StreamHandler):
@@ -21,12 +19,9 @@ class TelegramHandler(StreamHandler):
         super().__init__(*args, **kwargs)
 
     def emit(self, record: LogRecord) -> None:
-        msg = self.format(record=record)
-        try:
+        with suppress(telegram.error.TimedOut):
             self._bot.send_message(
                 chat_id=self._chat_id,
-                text=msg,
+                text=self.format(record=record),
                 disable_web_page_preview=True,
             )
-        except telegram.error.TimedOut:
-            pass
