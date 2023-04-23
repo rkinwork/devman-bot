@@ -96,6 +96,7 @@ def parse_args():
     )
     parser.add_argument(
         '--poll-timeout',
+        default=DEFAULT_TIMEOUT,
         help='timeout for DVMN long polling API response',
     )
 
@@ -136,11 +137,12 @@ def main():
                     'Authorization': 'Token {0}'.format(options.token),
                 },
             )
-        except (
-                requests.exceptions.ConnectionError,
-                requests.exceptions.ReadTimeout,
-        ) as err:
+        except requests.exceptions.ReadTimeout:
+            log.debug('starting new attempt of long polling')
+            continue
+        except requests.exceptions.ConnectionError as err:
             log.error(msg=err)
+            time.sleep(SECONDS_TO_SLEEP)
             log.debug('retrying after DVMN.ORG connection problems')
             continue
         except Exception as err:
